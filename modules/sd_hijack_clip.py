@@ -5,6 +5,10 @@ import torch
 from modules import prompt_parser, devices
 from modules.shared import opts
 
+import re
+
+re_OR = re.compile(r"\bOR\b")
+OR_sentinel = " ..OR.. "
 
 def get_target_prompt_token_count(token_count):
     return math.ceil(max(token_count, 1) / 75) * 75
@@ -45,19 +49,25 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
                 embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, i)
 
-                if token == self.comma_token:
+                def padded(tokens_to_pad, mults_to_pad):
+                    length = len(tokens_to_pad)
+                    rem = int(math.ceil(length / 75)) * 75 - length
+                    return tokens_to_pad + [self.id_end] * rem, mults_to_pad + [1.0] * rem
+
+                if tokens[i:i+len(self.OR_tokens)] == self.OR_tokens:
+                    remade_tokens, multipliers = padded(remade_tokens, multipliers)
+                    i += len(self.OR_tokens)
+                    continue
+                elif token == self.comma_token:
                     last_comma = len(remade_tokens)
-                elif opts.comma_padding_backtrack != 0 and max(len(remade_tokens), 1) % 75 == 0 and last_comma != -1 and len(remade_tokens) - last_comma <= opts.comma_padding_backtrack:
+                elif opts.comma_padding_backtrack != 0 and max(len(remade_tokens), 1) % 75 == 0 and last_comma != -1 and len(remade_tokens) - last_comma <= opts.comma_padding_backtrack and remade_tokens[-1] != self.id_end:
                     last_comma += 1
                     reloc_tokens = remade_tokens[last_comma:]
                     reloc_mults = multipliers[last_comma:]
 
-                    remade_tokens = remade_tokens[:last_comma]
-                    length = len(remade_tokens)
-
-                    rem = int(math.ceil(length / 75)) * 75 - length
-                    remade_tokens += [self.id_end] * rem + reloc_tokens
-                    multipliers = multipliers[:last_comma] + [1.0] * rem + reloc_mults
+                    remade_tokens, multipliers = padded(remade_tokens[:last_comma], multipliers[:last_comma])
+                    remade_tokens += reloc_tokens
+                    multipliers += reloc_mults
 
                 if embedding is None:
                     remade_tokens.append(token)
@@ -96,6 +106,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         cache = {}
         batch_multipliers = []
         for line in texts:
+            line = re.sub(re_OR, OR_sentinel, line)
             if line in cache:
                 remade_tokens, fixes, multipliers = cache[line]
             else:
@@ -240,8 +251,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         z = self.encode_with_transformers(tokens)
 
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
-        batch_multipliers_of_same_length = [x + [1.0] * (75 - len(x)) for x in batch_multipliers]
-        batch_multipliers = torch.asarray(batch_multipliers_of_same_length).to(devices.device)
+        batch_multipliers = torch.asarray(batch_multipliers).to(device)
         original_mean = z.mean()
         z *= batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
         new_mean = z.mean()
@@ -255,6 +265,7 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
         super().__init__(wrapped, hijack)
         self.tokenizer = wrapped.tokenizer
         self.comma_token = [v for k, v in self.tokenizer.get_vocab().items() if k == ',</w>'][0]
+        self.OR_tokens = self.tokenizer(OR_sentinel, truncation=False, add_special_tokens=False)["input_ids"]
 
         self.token_mults = {}
         tokens_with_parens = [(k, v) for k, v in self.tokenizer.get_vocab().items() if '(' in k or ')' in k or '[' in k or ']' in k]
