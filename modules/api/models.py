@@ -157,7 +157,8 @@ class PNGInfoRequest(BaseModel):
     image: str = Field(title="Image", description="The base64 encoded PNG image")
 
 class PNGInfoResponse(BaseModel):
-    info: str = Field(title="Image info", description="A string with all the info the image had")
+    info: str = Field(title="Image info", description="A string with the parameters used to generate the image")
+    items: dict = Field(title="Items", description="An object containing all the info the image had")
 
 class ProgressRequest(BaseModel):
     skip_current_image: bool = Field(default=False, title="Skip current image", description="Skip current image serialization")
@@ -249,3 +250,13 @@ class ArtistItem(BaseModel):
     score: float = Field(title="Score")
     category: str = Field(title="Category")
 
+class EmbeddingItem(BaseModel):
+    step: Optional[int] = Field(title="Step", description="The number of steps that were used to train this embedding, if available")
+    sd_checkpoint: Optional[str] = Field(title="SD Checkpoint", description="The hash of the checkpoint this embedding was trained on, if available")
+    sd_checkpoint_name: Optional[str] = Field(title="SD Checkpoint Name", description="The name of the checkpoint this embedding was trained on, if available. Note that this is the name that was used by the trainer; for a stable identifier, use `sd_checkpoint` instead")
+    shape: int = Field(title="Shape", description="The length of each individual vector in the embedding")
+    vectors: int = Field(title="Vectors", description="The number of vectors in the embedding")
+
+class EmbeddingsResponse(BaseModel):
+    loaded: Dict[str, EmbeddingItem] = Field(title="Loaded", description="Embeddings loaded for the current model")
+    skipped: Dict[str, EmbeddingItem] = Field(title="Skipped", description="Embeddings skipped for the current model (likely due to architecture incompatibility)")
